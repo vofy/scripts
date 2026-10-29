@@ -15,16 +15,15 @@ Google Drive and OneDrive on Linux with rclone. It works like the official Windo
 ## Quick start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<you>/rclone-cloud-storage/main/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/vofy/scripts/main/rclone-cloud-storage/setup.sh | bash
 ```
 
 With options (everything after `--` goes to the script):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<you>/rclone-cloud-storage/main/setup.sh | bash -s -- --provider onedrive --mode mirror
+curl -fsSL https://raw.githubusercontent.com/vofy/scripts/main/rclone-cloud-storage/setup.sh | bash -s -- --provider onedrive --mode mirror
 ```
 
-> Replace the URL with wherever you host `setup.sh` (a GitHub repo or Gist "Raw" link).
 > Pipe it to **`bash`**, not `sh`, because the script uses bash features.
 > The script asks for `sudo` only to install packages, and its prompts still work when it's piped.
 
