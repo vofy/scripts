@@ -1,74 +1,38 @@
 # rclone cloud storage for Linux
 
-Google Drive and OneDrive on Linux with rclone. It works like the official Windows clients (**Google Drive for Desktop** and **OneDrive**), with both of their modes:
+Google Drive or OneDrive on Linux with rclone, in one of two modes:
 
-| Mode | Like Windows… | What it does | Disk use | Offline |
-|---|---|---|---|---|
-| **stream** | Drive: "Stream files" · OneDrive: "Files On-Demand" (both the default) | The drive appears as a folder. Files download when opened and stay cached. Changes upload within ~5 s. | Only the cache (default max 20 GiB) | Only files already in the cache |
-| **mirror** | Drive: "Mirror files" · OneDrive: "Always keep on this device" | A full local copy, synced both ways every 5 min | Your whole drive | Yes |
+- **stream** (default): the drive appears as a folder (`~/GoogleDrive`, `~/OneDrive`). Files download when opened and stay cached.
+- **mirror**: a full local copy that works offline, synced both ways every 5 minutes.
 
-| Provider | `--provider` | Remote name | Local folder |
-|---|---|---|---|
-| Google Drive | `gdrive` | `gdrive` | `~/GoogleDrive` |
-| OneDrive (personal or work/school) | `onedrive` | `onedrive` | `~/OneDrive` |
+## Setup
 
-## Quick start
+For Google Drive, first create your own Google client ID, see [below](#own-google-client-id-do-this-for-google-drive). Then run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vofy/scripts/main/rclone-cloud-storage.sh | bash
 ```
 
-With options (everything after `--` goes to the script):
+The script asks for each setting; press Enter to accept the `[default]`. It shows a summary, asks you to confirm, then opens a browser to sign in. Rerun it any time to change settings. Run it once per service to use both.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/vofy/scripts/main/rclone-cloud-storage.sh | bash -s -- --provider onedrive --mode mirror
-```
+Settings can also be passed as options (after `bash -s --` when piped):
 
-> Pipe it to **`bash`**, not `sh`, because the script uses bash features.
-> The script asks for `sudo` only to install packages, and its prompts still work when it's piped.
+| Option | Default |
+|---|---|
+| `--provider gdrive\|onedrive` | `gdrive` |
+| `--mode stream\|mirror` | `stream` |
+| `--path DIR` | `~/GoogleDrive` / `~/OneDrive` |
+| `--remote-path PATH` (sync one folder only) | `/` (whole drive) |
+| `--cache-size SIZE` (stream) | `20G` |
+| `--interval TIME` (mirror) | `5min` |
+| `--client-id ID --client-secret S` | required for Google Drive |
+| `--token JSON` | for machines without a browser, see below |
+| `--remote NAME` | provider name |
+| `-y` | ask nothing, use the defaults |
 
-Or from a local copy:
+### Own Google client ID (do this for Google Drive)
 
-```bash
-chmod +x rclone-cloud-storage.sh
-./rclone-cloud-storage.sh                                       # asks for everything
-./rclone-cloud-storage.sh --provider gdrive --mode stream       # asks only for the rest
-./rclone-cloud-storage.sh --provider onedrive --mode mirror -y  # no questions, defaults for the rest
-```
-
-The script asks for every setting you don't pass as an option. Press Enter to accept the default shown in `[brackets]`. Before changing anything it shows a summary and asks you to confirm.
-
-To use both services, run the script once per provider. Each provider gets its own remote, folder and systemd units.
-
-### Options
-
-| Option | Asked? | Default | Meaning |
-|---|---|---|---|
-| `--provider gdrive\|onedrive` | yes | Google Drive | Cloud service. It's detected automatically when `--remote` names an existing remote |
-| `--mode stream\|mirror` | yes | stream | Sync mode |
-| `--path DIR` | yes | `~/GoogleDrive` / `~/OneDrive` | Local folder |
-| `--remote-path PATH` | yes | whole drive | Sync only one folder, e.g. `"02_Dokumenty"` |
-| `--cache-size SIZE` | stream | `20G` | Maximum cache size |
-| `--interval TIME` | mirror | `5min` | Time between syncs |
-| `--client-id ID` / `--client-secret S` | Google Drive: always | the remote's current one, if it has its own | Your own OAuth client. **Required for Google Drive**, see below. Optional for OneDrive (not asked) |
-| `--token JSON` | when there's no browser | | Sign-in token for machines without a browser |
-| `--remote NAME` | no | provider name | rclone remote name |
-| `--uninstall` | | | Remove the systemd units (files and config are kept) |
-| `-y` | | | Ask nothing: use the defaults and skip confirmations |
-
-You can rerun the script at any time, for example to switch modes. It reuses the existing remote, so you won't have to sign in again.
-
-### What the script does
-
-1. Installs rclone with dnf, apt, pacman or zypper. If the distro version is older than 1.66, it uses the official installer instead. For stream mode it also installs FUSE.
-2. Creates the remote and opens a browser for the Google or Microsoft sign-in.
-3. **stream:** creates `~/.config/systemd/user/rclone-<remote>.service`, which runs `rclone mount` with a full VFS cache. At startup it loads the whole folder tree in the background, so folders open instantly instead of taking a second or two each the first time after boot.
-   **mirror:** creates `rclone-<remote>-bisync.service` and `.timer`, runs the first full `rclone bisync --resync` while you watch, then turns on the timer.
-4. Adds a "Google Drive" or "OneDrive" shortcut to the sidebar of GNOME Files, Nautilus and other GTK file managers.
-
-## Own Google client ID (do this for Google Drive)
-
-rclone's built-in Google client ID is shared by every user. Google throttles it, and **it is being retired in 2026**, after which drives that use it stop syncing. That's why the script won't set up Google Drive without your own. Make one (free, about 5 minutes):
+rclone's shared Google client ID is throttled and **is being retired in 2026**, after which drives that use it stop syncing. Create your own (free, about 5 minutes):
 
 1. Go to <https://console.cloud.google.com/> and create a project.
 2. Open **APIs & Services → Library → Google Drive API → Enable**.
@@ -85,157 +49,70 @@ rclone's built-in Google client ID is shared by every user. Google throttles it,
    | Authorized domains | `github.com` |
    | Developer contact information | Your email |
 
-   Google requires a home page and a privacy policy link, but only checks them when an app is submitted for verification. An app used only by you never is, so links to this repo are enough.
+   Google only checks the links when an app is submitted for verification, which an app used only by you never is.
 4. Open **Audience** and add your Google account under **Test users**.
 5. Open **Data access → Add or remove scopes**. Add `https://www.googleapis.com/auth/drive`.
 6. Open **Clients → Create client** and choose type **Desktop app**. Copy the client ID and secret.
-7. Open **Audience → Publish app** (to "In production"). This step matters: while the app is in testing mode, tokens expire every 7 days.
-   You'll see an "unverified app" screen when you sign in. Click **Advanced → Go to … (unsafe)**. This is expected, because it's your own app.
+7. Open **Audience → Publish app** (to "In production"). While the app is in testing mode, sign-ins expire every 7 days.
 
-Then rerun the script and paste the ID and secret when it asks for them, or pass them as options:
+When you sign in, Google shows an "unverified app" screen. Click **Advanced → Go to … (unsafe)**; it's your own app. The same client ID works on all your machines.
+
+### Machines without a browser (servers, SSH)
+
+On a computer with a browser and rclone, run `rclone authorize drive "CLIENT_ID" "CLIENT_SECRET"` (or `rclone authorize onedrive`). Pass the JSON it prints to the script:
 
 ```bash
-./rclone-cloud-storage.sh --provider gdrive --mode stream --client-id 'XXXX.apps.googleusercontent.com' --client-secret 'YYYY'
+./rclone-cloud-storage.sh --token '{"access_token":...}'
 ```
 
-On a machine that is already set up, this switches the remote to your client and asks you to sign in again. You can reuse the same client ID on all your machines. With your own client ID the script also lifts rclone's conservative limit of 10 Drive requests per second, which makes browsing noticeably faster.
+For stream mode, also keep your services running after logout: `sudo loginctl enable-linger $USER`.
 
-Details: <https://rclone.org/drive/#making-your-own-client-id>
-
-OneDrive works fine with rclone's built-in client. If you get throttled a lot, you can register your own app: <https://rclone.org/onedrive/#getting-your-own-client-id-and-key>.
-
-## Machines without a browser (servers, SSH)
-
-On any computer with a browser and rclone installed, run:
+## Uninstall
 
 ```bash
-rclone authorize drive                         # Google Drive; or: rclone authorize drive "CLIENT_ID" "CLIENT_SECRET"
-rclone authorize onedrive                      # OneDrive
+./rclone-cloud-storage.sh --provider gdrive --uninstall   # stop and remove the services (or onedrive)
+rclone config delete gdrive                               # forget the account
+rm -rf ~/.cache/rclone                                    # cache, logs and sync state (all services)
 ```
 
-Copy the JSON it prints, `{"access_token":...}`. The script asks you to paste it when it finds no browser, or you can pass it as an option:
+Then remove the app's access: [Google](https://myaccount.google.com/permissions), [Microsoft personal](https://account.live.com/consent/Manage), [Microsoft work/school](https://myapps.microsoft.com).
+
+## Debug
+
+The commands use `gdrive`; for OneDrive use `onedrive`.
 
 ```bash
-./rclone-cloud-storage.sh --provider onedrive --mode mirror --token '{"access_token":...}'
-```
-
-Stream mode on a server also needs the user's services to keep running after logout: `sudo loginctl enable-linger $USER`.
-
-## Everyday use
-
-The examples below use `gdrive`. For OneDrive, replace it with `onedrive` (or your `--remote` name).
-
-**stream**
-
-```bash
-systemctl --user status rclone-gdrive          # is it mounted?
-systemctl --user restart rclone-gdrive         # remount
+# stream
+systemctl --user status rclone-gdrive            # is it mounted?
+systemctl --user restart rclone-gdrive           # remount
 tail -f ~/.cache/rclone/gdrive-mount.log
-du -sh ~/.cache/rclone/vfs                     # cache size
-```
 
-**mirror**
-
-```bash
-systemctl --user list-timers rclone-gdrive-bisync.timer   # next run
+# mirror
+systemctl --user list-timers rclone-gdrive-bisync.timer   # next sync
 systemctl --user start rclone-gdrive-bisync.service       # sync now
-journalctl --user -u rclone-gdrive-bisync -n 50
 tail -f ~/.cache/rclone/gdrive-bisync.log
+
+rclone about gdrive:                             # can rclone reach the drive?
 ```
-
-## Provider notes
-
-### Google Docs/Sheets/Slides
-
-- **stream:** each one appears as a small `.html` file that opens the document in your browser, similar to `.gdoc` files on Windows.
-- **mirror:** they are skipped (`--drive-skip-gdocs`). Native Google files can't be synced both ways. Open them at drive.google.com.
-
-### OneDrive
-
-- Office files are ordinary files on OneDrive, so they sync normally in both modes.
-- OneNote notebooks are hidden, because they can't be downloaded as files. Open them in OneNote or at onedrive.com.
-- The script signs in to your account's main OneDrive. To use a SharePoint library instead, create the remote with `rclone config` and pass its name with `--remote`.
-
-## Differences from the Windows clients
-
-- There's no tray icon or per-file sync status. Use the log and the `systemctl` commands above.
-- There's no "Make available offline" option for single files in stream mode. Files you've opened stay cached for 30 days. To keep a folder offline, use mirror mode with `--remote-path` and a separate `--remote` name.
-- Mirror mode syncs on a timer rather than instantly.
-- Google shared drives and files that others shared with you on OneDrive aren't included. Add a second remote with `rclone config` if you need them.
-
-## Manual setup (without the script)
-
-```bash
-sudo dnf install rclone fuse3                  # or apt/pacman
-rclone config create gdrive drive scope=drive  # Google Drive, browser sign-in
-rclone config create onedrive onedrive         # OneDrive, browser sign-in
-mkdir -p ~/GoogleDrive ~/.cache/rclone
-```
-
-**stream:** save as `~/.config/systemd/user/rclone-gdrive.service`. For OneDrive, change the remote, folder, socket and log names, and drop the `--drive-*` flags. Add `--drive-pacer-min-sleep 10ms --drive-pacer-burst 200` only if the remote has its own client ID:
-
-```ini
-[Unit]
-Description=Google Drive stream mount
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Type=notify
-ExecStartPre=-/usr/bin/fusermount3 -uz %h/GoogleDrive
-ExecStartPre=-rm -f %t/rclone-gdrive.sock
-ExecStart=/usr/bin/rclone mount gdrive: %h/GoogleDrive \
-    --vfs-cache-mode full --vfs-cache-max-size 20G --vfs-cache-max-age 720h \
-    --vfs-cache-min-free-space 10G --vfs-write-back 5s --vfs-read-ahead 128M \
-    --vfs-fast-fingerprint --dir-cache-time 1000h --poll-interval 15s \
-    --attr-timeout 10s --transfers 8 \
-    --rc --rc-addr unix://%t/rclone-gdrive.sock --rc-no-auth \
-    --volname "Google Drive" --umask 077 \
-    --log-level NOTICE --log-file %h/.cache/rclone/gdrive-mount.log \
-    --drive-export-formats link.html --drive-acknowledge-abuse --drive-chunk-size 64M
-ExecStartPost=/usr/bin/rclone rc --unix-socket %t/rclone-gdrive.sock vfs/refresh recursive=true _async=true
-ExecStop=/usr/bin/fusermount3 -uz %h/GoogleDrive
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-```
-
-```bash
-systemctl --user daemon-reload && systemctl --user enable --now rclone-gdrive
-```
-
-**mirror:** run the first sync once, then put the same command without `--resync` in a oneshot service with a timer. For OneDrive, drop `--drive-skip-gdocs`:
-
-```bash
-rclone bisync gdrive: ~/GoogleDrive --resync --resync-mode newer \
-    --create-empty-src-dirs --resilient --recover --max-lock 2m \
-    --conflict-resolve newer --drive-skip-gdocs --progress
-```
-
-## Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| `Time may be set wrong` / sign-in errors | See **Clock** below |
-| stream: `directory not empty` | The mount folder must be empty. Move its files out or use a different `--path` |
+| `invalid_grant`, `Invalid Credentials`, token expired | `rclone config reconnect gdrive:`, then restart the service. If it happens every 7 days, publish your Google app (step 7) |
+| `rateLimitExceeded`, very slow Google Drive | You're on rclone's shared client ID. Rerun the script with your own |
+| `Time may be set wrong`, sign-in errors | See **Clock** below |
+| stream: `directory not empty` | The mount folder must be empty. Move its files out or use another `--path` |
 | stream: `Transport endpoint is not connected` | `fusermount3 -uz ~/GoogleDrive; systemctl --user restart rclone-gdrive` |
-| mirror: `too many deletes` | Safety stop: more than 50% of files would be deleted. Check the log; if the deletes are intended, run the bisync command once with `--force` |
-| mirror: `must run --resync` | Run the bisync command above once with `--resync` (this also applies after you edit the filters file) |
+| mirror: `must run --resync` | Rerun the script; its first sync does the resync (also needed after editing `~/.config/rclone/gdrive-bisync-filters.txt`) |
+| mirror: `too many deletes` | Safety stop: over half the files would be deleted. If that's intended, run the `ExecStart` command from `systemctl --user cat rclone-gdrive-bisync.service` once with `--force` added |
 | mirror: files named `*.conflict1` | The file changed on both sides. The newer copy keeps the name; check the other one and delete it |
-| `invalid_grant` / token expired | `rclone config reconnect gdrive:` (for Google, if it keeps happening, publish your OAuth app, see step 7) |
-| OneDrive work/school: Office files keep re-syncing or show size/hash errors | SharePoint changes Office files after upload. Add `--ignore-size --ignore-checksum` to the bisync command in the service file |
-| `Remote '…' is of type …` | A remote with that name already exists for the other provider. Pass a different `--remote` |
+| OneDrive work/school: Office files keep re-syncing | Add `--ignore-size --ignore-checksum` to `ExecStart` in `~/.config/systemd/user/rclone-onedrive-bisync.service`, then `systemctl --user daemon-reload` |
 
 ### Clock
 
-Google and Microsoft reject requests when the computer's clock is wrong. Check it with `timedatectl`. `System clock synchronized` should say `yes`.
-
-On a **dual-boot machine with Windows**, Linux often keeps the hardware clock in local time, which makes the clock drift by your UTC offset. Fix both systems:
+Google and Microsoft reject sign-ins when the clock is wrong. In `timedatectl`, `System clock synchronized` should say `yes`. On a dual-boot machine with Windows, make both systems keep the hardware clock in UTC:
 
 ```bash
-sudo timedatectl set-local-rtc 0          # Linux: hardware clock = UTC
+sudo timedatectl set-local-rtc 0
 ```
 
 On Windows, in an admin terminal:
@@ -243,17 +120,3 @@ On Windows, in an admin terminal:
 ```
 reg add "HKLM\System\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f
 ```
-
-## Uninstall
-
-```bash
-./rclone-cloud-storage.sh --remote gdrive --uninstall     # stop and remove the services (or --remote onedrive)
-rclone config delete gdrive                # forget the account
-rm -rf ~/.cache/rclone                     # cache, logs and bisync state (all providers)
-```
-
-Then remove access to the app:
-
-- Google: <https://myaccount.google.com/permissions>
-- Microsoft personal account: <https://account.live.com/consent/Manage>
-- Microsoft work or school account: <https://myapps.microsoft.com>
