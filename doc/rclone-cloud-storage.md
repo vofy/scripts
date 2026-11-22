@@ -27,7 +27,7 @@ Settings can also be passed as options (after `bash -s --` when piped):
 | `--interval TIME` (mirror) | `5min` |
 | `--client-id ID --client-secret S` | required for Google Drive |
 | `--token JSON` | for machines without a browser, see below |
-| `--remote NAME` | provider name |
+| `--name NAME` (name of this setup, to set up a service more than once) | `gdrive` / `onedrive` |
 | `-y` | ask nothing, use the defaults |
 
 ### Own Google client ID (do this for Google Drive)
@@ -69,17 +69,19 @@ For stream mode, also keep your services running after logout: `sudo loginctl en
 
 ## Uninstall
 
+Each setup has a name, shown when it's set up: `gdrive` or `onedrive` unless you picked one with `--name`.
+
 ```bash
-./rclone-cloud-storage.sh --provider gdrive --uninstall   # stop and remove the services (or onedrive)
-rclone config delete gdrive                               # forget the account
-rm -rf ~/.cache/rclone                                    # cache, logs and sync state (all services)
+curl -fsSL https://raw.githubusercontent.com/vofy/scripts/main/rclone-cloud-storage.sh | bash -s -- --uninstall gdrive
 ```
+
+Without a name, the script lists the setups and asks which one to remove. It then asks whether to delete the local data (the local folder, cache and logs); the default and `-y` keep it. In mirror mode it syncs once more before deleting, and keeps everything if that sync fails. The account stays either way; remove it with `rclone config delete gdrive`.
 
 Then remove the app's access: [Google](https://myaccount.google.com/permissions), [Microsoft personal](https://account.live.com/consent/Manage), [Microsoft work/school](https://myapps.microsoft.com).
 
 ## Debug
 
-The commands use `gdrive`; for OneDrive use `onedrive`.
+The commands use the setup named `gdrive`; replace it with yours (e.g. `onedrive`).
 
 ```bash
 # stream

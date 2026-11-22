@@ -66,8 +66,9 @@ Anything not given is asked for.
   --client-id ID              Your own OAuth client ID, required for Google Drive:
   --client-secret SECRET        $CLIENT_ID_DOC
   --token JSON                Token from 'rclone authorize' (machines without a browser)
-  --remote NAME               rclone remote name            (default: the provider name)
-  --uninstall                 Remove the systemd units (keeps files and config)
+  --name NAME                 Name of this setup (its rclone remote), to set up the
+                              same service more than once   (default: gdrive or onedrive)
+  --uninstall [NAME]          Remove the setup NAME (asks which if not given)
   -y, --yes                   Don't ask, use the defaults
   -h, --help                  Show this help
 EOF
@@ -85,12 +86,13 @@ can_ask() { [[ $ASSUME_YES -eq 0 ]] && ( : </dev/tty ) 2>/dev/null; }
 ask() {
     local -n _v=$1
     [[ -n $_v ]] && return 0
-    can_ask && read -rp "$2 [$3]: " _v </dev/tty
+    can_ask && read -rp "$2${3:+ [$3]}: " _v </dev/tty
     _v=${_v:-$3}
 }
 
 version_ge() { [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" == "$2" ]]; }
 rclone_version() { rclone version 2>/dev/null | awk 'NR==1{sub(/^v/,"",$2); sub(/-.*/,"",$2); print $2}'; }
+folder_uri() { echo "file://$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$1" 2>/dev/null || echo "$1")"; }
 client_id_of() { command -v rclone >/dev/null && rclone config show "$1" 2>/dev/null | sed -n 's/^client_id = //p' || true; }
 
 install_pkgs() {
@@ -268,14 +270,73 @@ EOF
     systemctl --user enable --now "$MIRROR_UNIT.timer"
 }
 
+# Names of the setups that have systemd units (rclone-NAME.service, rclone-NAME-bisync.*).
+installed_names() {
+    local f n
+    for f in "$UNIT_DIR"/rclone-*.service "$UNIT_DIR"/rclone-*-bisync.timer; do
+        [[ -e $f ]] || continue
+        n=${f##*/rclone-}; n=${n%.service}; n=${n%.timer}
+        echo "${n%-bisync}"
+    done | sort -u
+}
+
 uninstall() {
-    info "Removing the systemd units of remote '$REMOTE'"
-    systemctl --user disable --now "$STREAM_UNIT" "$MIRROR_UNIT.timer" 2>/dev/null || true
-    systemctl --user stop "$MIRROR_UNIT.service" 2>/dev/null || true
-    rm -f "$UNIT_DIR/$STREAM_UNIT" "$UNIT_DIR/$MIRROR_UNIT".{service,timer}
+    local names default=""
+    names=$(installed_names)
+    [[ -n $names ]] || die "No cloud storage is set up."
+    if [[ -z $REMOTE ]]; then
+        can_ask && echo "Set up: $(echo $names)"
+        [[ $names == *$'\n'* ]] || default=$names
+        ask REMOTE "Name to remove" "$default"
+    fi
+    [[ -n $REMOTE ]] || die "Say which one to remove: --uninstall NAME. Set up: $(echo $names)"
+    grep -qxF -- "$REMOTE" <<<"$names" || die "'$REMOTE' isn't set up. Set up: $(echo $names)"
+
+    # The local folder is the second quoted argument of ExecStart: rclone mount|bisync "SRC" "DIR".
+    local unit=$UNIT_DIR/rclone-$REMOTE.service mirror=0 dir delete=""
+    [[ -e $UNIT_DIR/rclone-$REMOTE-bisync.service ]] && { unit=$UNIT_DIR/rclone-$REMOTE-bisync.service; mirror=1; }
+    dir=$(sed -n 's/^ExecStart=[^"]*"[^"]*" "\([^"]*\)".*/\1/p' "$unit" 2>/dev/null)
+
+    if can_ask; then
+        [[ $mirror -eq 1 ]] && echo "${dir:-The local folder} holds a full copy of the files; they stay in the cloud."
+        read -rp "Delete the local data of '$REMOTE' (${dir:+$dir, }cache and logs)? [y/N] " delete </dev/tty
+    fi
+    [[ $delete =~ ^[Yy] ]] && delete=1 || delete=0
+    if [[ $delete -eq 1 && $mirror -eq 1 ]]; then
+        info "Syncing once more so no local changes are lost"
+        systemctl --user start "rclone-$REMOTE-bisync.service" \
+            || die "The last sync failed, so nothing was removed. See: journalctl --user -u rclone-$REMOTE-bisync"
+    fi
+
+    info "Removing '$REMOTE'"
+    systemctl --user disable --now "rclone-$REMOTE.service" "rclone-$REMOTE-bisync.timer" 2>/dev/null || true
+    systemctl --user stop "rclone-$REMOTE-bisync.service" 2>/dev/null || true
+    rm -f "$UNIT_DIR/rclone-$REMOTE.service" "$UNIT_DIR/rclone-$REMOTE-bisync".{service,timer}
     systemctl --user daemon-reload
-    echo "Done. Local files, the rclone remote and its cache were kept."
-    echo "To remove those too:  rclone config delete $REMOTE; rm -rf $LOG_DIR"
+
+    local bm=$HOME/.config/gtk-3.0/bookmarks uri
+    if [[ -n $dir && -f $bm ]]; then
+        uri="$(folder_uri "$dir") "
+        awk -v u="$uri" 'index($0, u) != 1' "$bm" > "$bm.tmp" && mv "$bm.tmp" "$bm"
+    fi
+
+    if [[ $delete -eq 1 ]]; then
+        info "Deleting the local data"
+        rm -rf "$LOG_DIR"/vfs*/"$REMOTE{"* "$LOG_DIR/bisync/${REMOTE}_"* "$LOG_DIR/$REMOTE"-*.log \
+            "$HOME/.config/rclone/$REMOTE-bisync-filters.txt"
+        if [[ -n $dir ]]; then
+            # A folder that is still mounted shows the cloud files: deleting it would delete those.
+            mountpoint -q "$dir" && die "$dir is still mounted, so it was kept. Unmount it with: fusermount3 -uz '$dir'"
+            if [[ $mirror -eq 1 ]]; then
+                [[ $dir != "$HOME" && $dir != / ]] && rm -rf -- "$dir"
+            else
+                rmdir -- "$dir" 2>/dev/null || warn "$dir isn't empty, so it was kept."
+            fi
+        fi
+        echo "Done. The account was kept; to remove it: rclone config delete $REMOTE"
+    else
+        echo "Done. ${dir:+$dir, }the cache and the account were kept."
+    fi
 }
 
 # ---------------------------------------------------------------- main
@@ -292,14 +353,17 @@ main() {
             --client-id)     CLIENT_ID=$2; shift 2 ;;
             --client-secret) CLIENT_SECRET=$2; shift 2 ;;
             --token)         TOKEN=$2; shift 2 ;;
-            --remote)        REMOTE=$2; shift 2 ;;
-            --uninstall)     UNINSTALL=1; shift ;;
+            --name|--remote) REMOTE=$2; shift 2 ;;
+            --uninstall)     UNINSTALL=1
+                             [[ -n ${2:-} && $2 != -* ]] && { REMOTE=$2; shift; }
+                             shift ;;
             -y|--yes)        ASSUME_YES=1; shift ;;
             -h|--help)       usage; exit 0 ;;
             *)               usage >&2; die "Unknown option: $1" ;;
         esac
     done
     [[ $EUID -eq 0 ]] && die "Run this as your normal user, not root (it uses sudo when needed)."
+    if [[ $UNINSTALL -eq 1 ]]; then uninstall; exit 0; fi
 
     can_ask && echo "Press Enter to accept the [default]."
     ask PROVIDER "Cloud service, gdrive or onedrive" gdrive
@@ -315,7 +379,6 @@ main() {
     REMOTE=${REMOTE:-$PROVIDER}
     STREAM_UNIT=rclone-$REMOTE.service
     MIRROR_UNIT=rclone-$REMOTE-bisync
-    if [[ $UNINSTALL -eq 1 ]]; then uninstall; exit 0; fi
 
     ask MODE "Mode, stream (files download when opened) or mirror (full offline copy)" stream
     [[ $MODE == stream || $MODE == mirror ]] || die "--mode must be stream or mirror"
@@ -333,7 +396,7 @@ main() {
     [[ -n $CLIENT_ID && -z $CLIENT_SECRET ]] && die "--client-id needs --client-secret"
 
     echo
-    info "$NAME: $SRC -> $LOCAL_DIR"
+    info "'$REMOTE' ($NAME): ${REMOTE_PATH:-whole drive} -> $LOCAL_DIR"
     if [[ $MODE == stream ]]; then
         echo "    stream mode, cache up to $CACHE_SIZE"
     else
@@ -353,12 +416,12 @@ main() {
 
     # Sidebar shortcut in GNOME Files and other GTK file managers.
     local bm=$HOME/.config/gtk-3.0/bookmarks uri
-    uri="file://$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$LOCAL_DIR" 2>/dev/null || echo "$LOCAL_DIR")"
+    uri=$(folder_uri "$LOCAL_DIR")
     mkdir -p "${bm%/*}"
     grep -q "^$uri " "$bm" 2>/dev/null || echo "$uri $NAME" >> "$bm"
 
     echo
-    info "Done: $NAME ($MODE) at $LOCAL_DIR"
+    info "Done: '$REMOTE' ($NAME, $MODE) at $LOCAL_DIR"
     if [[ $MODE == stream ]]; then
         echo "  Status:   systemctl --user status $STREAM_UNIT"
         echo "  Log:      $LOG_DIR/$REMOTE-mount.log"
@@ -367,6 +430,7 @@ main() {
         echo "  Sync now: systemctl --user start $MIRROR_UNIT.service"
         echo "  Log:      $LOG_DIR/$REMOTE-bisync.log"
     fi
+    echo "  Remove:   rclone-cloud-storage.sh --uninstall $REMOTE"
 }
 
 main "$@"
