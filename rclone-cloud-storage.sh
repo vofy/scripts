@@ -186,6 +186,7 @@ and rerun this script with --token '<the JSON it prints>'."
 
 setup_stream() {
     systemctl --user disable --now "$MIRROR_UNIT.timer" 2>/dev/null || true
+    systemctl --user stop "$MIRROR_UNIT.service" 2>/dev/null || true
     rm -f "$UNIT_DIR/$MIRROR_UNIT".{service,timer}
     mountpoint -q "$LOCAL_DIR" || [[ -z $(ls -A "$LOCAL_DIR") ]] \
         || die "$LOCAL_DIR isn't empty. Stream mode mounts over it, so pick an empty --path."
@@ -280,6 +281,25 @@ installed_names() {
     done | sort -u
 }
 
+# stream: changes upload in the background and wait in the cache until then, so the cache
+# may only be deleted once the mount has nothing left to upload. Starting the mount (a no-op
+# when it runs) also uploads what a stopped mount left in the cache.
+wait_for_uploads() {
+    local sock=${XDG_RUNTIME_DIR:-/run/user/$UID}/rclone-$REMOTE.sock n last=""
+    systemctl --user start "rclone-$REMOTE.service" \
+        || die "Can't start '$REMOTE' to upload pending changes, so nothing was removed."
+    while :; do
+        n=$(rclone rc --unix-socket "$sock" vfs/stats 2>/dev/null \
+            | awk -F'[:,]' '/"uploads(InProgress|Queued)"/ {n += $2; ok = 1} END {print ok ? n : "?"}' || true)
+        [[ $n == 0 ]] && return 0
+        [[ $n == "?" ]] && die "Can't check '$REMOTE' for pending uploads, so nothing was removed.
+       Rerun the setup to update its service, or keep the local data."
+        [[ $n != "$last" ]] && info "Waiting for $n upload(s) to finish (Ctrl+C cancels, nothing has been removed yet)"
+        last=$n
+        sleep 2
+    done
+}
+
 uninstall() {
     local names default=""
     names=$(installed_names)
@@ -306,11 +326,16 @@ uninstall() {
         info "Syncing once more so no local changes are lost"
         systemctl --user start "rclone-$REMOTE-bisync.service" \
             || die "The last sync failed, so nothing was removed. See: journalctl --user -u rclone-$REMOTE-bisync"
+    elif [[ $delete -eq 1 ]]; then
+        wait_for_uploads
     fi
 
     info "Removing '$REMOTE'"
-    systemctl --user disable --now "rclone-$REMOTE.service" "rclone-$REMOTE-bisync.timer" 2>/dev/null || true
-    systemctl --user stop "rclone-$REMOTE-bisync.service" 2>/dev/null || true
+    # One unit per call: systemctl gives up on all of them when one doesn't exist.
+    local u
+    for u in "rclone-$REMOTE.service" "rclone-$REMOTE-bisync.timer" "rclone-$REMOTE-bisync.service"; do
+        systemctl --user disable --now "$u" 2>/dev/null || systemctl --user stop "$u" 2>/dev/null || true
+    done
     rm -f "$UNIT_DIR/rclone-$REMOTE.service" "$UNIT_DIR/rclone-$REMOTE-bisync".{service,timer}
     systemctl --user daemon-reload
 
@@ -322,15 +347,19 @@ uninstall() {
 
     if [[ $delete -eq 1 ]]; then
         info "Deleting the local data"
-        rm -rf "$LOG_DIR"/vfs*/"$REMOTE{"* "$LOG_DIR/bisync/${REMOTE}_"* "$LOG_DIR/$REMOTE"-*.log \
-            "$HOME/.config/rclone/$REMOTE-bisync-filters.txt"
-        if [[ -n $dir ]]; then
+        local p
+        for p in "$LOG_DIR"/vfs*/"$REMOTE{"* "$LOG_DIR/bisync/${REMOTE}_"* "$LOG_DIR/$REMOTE"-*.log \
+                 "$HOME/.config/rclone/$REMOTE-bisync-filters.txt"; do
+            if [[ -d $p ]]; then rclone purge "$p"; elif [[ -e $p ]]; then rclone deletefile "$p"; fi
+        done
+        if [[ -n $dir && -d $dir ]]; then
             # A folder that is still mounted shows the cloud files: deleting it would delete those.
             mountpoint -q "$dir" && die "$dir is still mounted, so it was kept. Unmount it with: fusermount3 -uz '$dir'"
             if [[ $mirror -eq 1 ]]; then
-                [[ $dir != "$HOME" && $dir != / ]] && rm -rf -- "$dir"
+                [[ $dir != "$HOME" && $dir != / ]] && rclone purge "$dir"
             else
-                rmdir -- "$dir" 2>/dev/null || warn "$dir isn't empty, so it was kept."
+                # rmdir only removes an empty folder.
+                rclone rmdir "$dir" 2>/dev/null || warn "$dir isn't empty, so it was kept."
             fi
         fi
         echo "Done. The account was kept; to remove it: rclone config delete $REMOTE"
