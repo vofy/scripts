@@ -72,7 +72,7 @@ rclone's built-in Google client ID is shared by every user. Google throttles it,
 
 1. Go to <https://console.cloud.google.com/> and create a project.
 2. Open **APIs & Services → Library → Google Drive API → Enable**.
-3. Open **Google Auth Platform → Branding**. Fill in an app name and your email. Choose audience **External**.
+3. Open **Google Auth Platform → Branding** (<https://console.cloud.google.com/auth/branding>). Fill in an app name and your email. Choose audience **External**.
 4. Open **Audience** and add your Google account under **Test users**.
 5. Open **Data access → Add or remove scopes**. Add `https://www.googleapis.com/auth/drive`.
 6. Open **Clients → Create client** and choose type **Desktop app**. Copy the client ID and secret.
