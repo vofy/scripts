@@ -7,7 +7,7 @@ Batch-renames files in the current directory. It can clean up WhatsApp image nam
 Run it from the folder that holds the files:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/vofy/scripts/main/rename-files/rename-files.sh | bash -s -- -w -r
+curl -fsSL https://raw.githubusercontent.com/vofy/scripts/main/rename-files.sh | bash -s -- -w -r
 ```
 
 Everything after `--` goes to the script. Pipe it to **`bash`**, not `sh`.
