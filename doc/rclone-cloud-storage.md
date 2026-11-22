@@ -79,11 +79,13 @@ rclone's built-in Google client ID is shared by every user. Google throttles it,
    | App name | Anything, e.g. `rclone` |
    | User support email | Your email |
    | App logo | Leave empty |
-   | **App domain:** Application home page, Application privacy policy link, Application terms of service link | Leave empty |
-   | Authorized domains | Leave empty |
+   | Application home page | `https://github.com/vofy/scripts` |
+   | Application privacy policy link | `https://github.com/vofy/scripts/blob/main/doc/rclone-cloud-storage.md` |
+   | Application terms of service link | Leave empty |
+   | Authorized domains | `github.com` |
    | Developer contact information | Your email |
 
-   The app domain fields are only needed for Google's app verification, which an app used only by you doesn't need. Every link there has to be on a domain you own and verify in Google Search Console, so a GitHub URL won't be accepted.
+   Google requires a home page and a privacy policy link, but only checks them when an app is submitted for verification. An app used only by you never is, so links to this repo are enough.
 4. Open **Audience** and add your Google account under **Test users**.
 5. Open **Data access → Add or remove scopes**. Add `https://www.googleapis.com/auth/drive`.
 6. Open **Clients → Create client** and choose type **Desktop app**. Copy the client ID and secret.
