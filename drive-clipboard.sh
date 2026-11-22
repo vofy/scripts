@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Copy each new scan from a Google Drive folder to this computer's clipboard, and delete
-# scans older than a day. For phone scanner apps that save to Drive (e.g. FairScan):
+# Copy each new scan from a Google Drive folder to this computer's clipboard, then keep it
+# in an archive subfolder for a day. For phone scanner apps that save to Drive (e.g. FairScan):
 # scan on the phone, press Ctrl+V on the computer.
 #
 #   ./drive-clipboard.sh --install     keep it running in the background (systemd user service)
@@ -14,7 +14,8 @@ set -euo pipefail
 # ---------------------------------------------------------------- defaults
 REMOTE=gdrive                        # rclone remote
 FOLDER=10_Clipboard/$(hostname -s)   # Drive folder the phone app saves into, one per computer
-MAX_AGE=24h                          # older scans are deleted (to Drive's trash)
+ARCHIVE=Archive                      # copied scans move to this subfolder...
+MAX_AGE=24h                          # ...and are deleted from it (to Drive's trash) at this age
 POLL=10                              # seconds between checks for a new scan
 CLEANUP_EVERY=3600                   # seconds between deletions of old scans
 
@@ -29,7 +30,7 @@ Usage: $(basename "$0") [--install | --uninstall] [options]
 
   --remote NAME     rclone remote                 (default: $REMOTE)
   --folder PATH     Drive folder to watch         (default: $FOLDER)
-  --max-age AGE     delete scans older than this  (default: $MAX_AGE)
+  --max-age AGE     how long copied scans stay in $ARCHIVE (default: $MAX_AGE)
   --install         run in the background from now on
   --uninstall       remove the background service
   -h, --help        show this help
@@ -40,10 +41,9 @@ info() { printf '\e[1;34m==>\e[0m %s\n' "$*"; }
 warn() { printf '\e[1;33mWarning:\e[0m %s\n' "$*" >&2; }
 die()  { printf '\e[1;31mError:\e[0m %s\n' "$*" >&2; exit 1; }
 
-# The scans as sorted "modtime;name" lines, or nothing (also when Drive can't be reached).
+# Scans not copied yet as sorted "modtime;name" lines, or nothing (also when Drive can't be reached).
 scans() {
-    rclone lsf "$REMOTE:$FOLDER" --files-only --max-age "$MAX_AGE" --format tp --separator ';' 2>/dev/null \
-        | sort || true
+    rclone lsf "$REMOTE:$FOLDER" --files-only --format tp --separator ';' 2>/dev/null | sort || true
 }
 
 clipboard() {
@@ -53,7 +53,8 @@ clipboard() {
         *.png)        type=image/png ;;
         *.jpg|*.jpeg) type=image/jpeg ;;
         *.pdf)        # The clipboard holds images, so a PDF becomes an image of its first page.
-                      pdftoppm -png -r 150 -f 1 -l 1 -singlefile "$file" "$STATE_DIR/page" || return 1
+                      pdftoppm -png -r 150 -f 1 -l 1 -singlefile "$file" "$STATE_DIR/page" \
+                          || { warn "Can't read $name, skipped"; return 0; }
                       file=$STATE_DIR/page.png type=image/png ;;
         *)            warn "$name isn't an image or PDF, skipped"; return 0 ;;
     esac
@@ -65,23 +66,28 @@ clipboard() {
 run() {
     command -v wl-copy >/dev/null || die "wl-copy is missing (package wl-clipboard)."
     mkdir -p "$STATE_DIR"
-    local seen now new next_cleanup=0
-    # Scans already there at start count as seen, so starting doesn't replace the clipboard.
-    seen=$(scans)
+    local now name started=0 next_cleanup=0
+    rclone mkdir "$REMOTE:$FOLDER/$ARCHIVE" 2>/dev/null || true
     info "Watching $REMOTE:$FOLDER"
     while :; do
         if (( SECONDS >= next_cleanup )); then
-            rclone delete "$REMOTE:$FOLDER" --min-age "$MAX_AGE" || warn "Deleting old scans failed"
+            rclone delete "$REMOTE:$FOLDER/$ARCHIVE" --min-age "$MAX_AGE" || warn "Deleting old scans failed"
             next_cleanup=$((SECONDS + CLEANUP_EVERY))
         fi
         now=$(scans)
-        # The newest of the scans not seen before (several can arrive between two checks).
-        new=$(comm -13 <(echo "$seen") <(echo "$now") | tail -1)
-        if [[ -n $new ]]; then
-            clipboard "${new#*;}" && seen=$now
-        elif [[ -n $now ]]; then
-            seen=$now
+        if [[ -n $now ]]; then
+            # Several scans can arrive between two checks: copy the newest, archive them all.
+            # Scans waiting when the service starts are only archived, so logging in doesn't
+            # replace the clipboard. A failed download is tried again at the next check.
+            if (( started )) && ! clipboard "$(tail -1 <<<"$now" | cut -d';' -f2-)"; then
+                sleep "$POLL"
+                continue
+            fi
+            while IFS=';' read -r _ name; do
+                rclone moveto "$REMOTE:$FOLDER/$name" "$REMOTE:$FOLDER/$ARCHIVE/$name" || warn "Archiving $name failed"
+            done <<<"$now"
         fi
+        started=1
         sleep "$POLL"
     done
 }
@@ -90,7 +96,7 @@ install() {
     local self
     self=$(realpath "$0")
     [[ -f $self ]] || die "Download the script first; --install needs a copy it can run from."
-    rclone mkdir "$REMOTE:$FOLDER" || die "Can't reach '$REMOTE:'. Is the rclone remote set up?"
+    rclone mkdir "$REMOTE:$FOLDER/$ARCHIVE" || die "Can't reach '$REMOTE:'. Is the rclone remote set up?"
 
     mkdir -p "$UNIT_DIR"
     info "Writing $UNIT_DIR/$UNIT"
